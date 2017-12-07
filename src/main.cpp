@@ -13,42 +13,7 @@
 #include "Network.h"
 #include "BlockingQueue.h"
 #include "Simulation.h"
-
-Network::Packet process_message(int id, std::vector<char>& data) {
-	Network::Packet packet;
-	packet.clientid = id;
-	packet.data = data;
-	return packet;
-}
-
-void worker( Containers::BlockingQueue<Network::Packet>& messages, Containers::LockingQueue<Game::Event>& events) 
-{
-	while (true) try {
-		auto p = messages.dequeue();
-		(std::cout << "Worker handling request '").write(p.data.data(), p.data.size()) << "'\n";
-		Game::Event ev;
-		ev.clientid = p.clientid;
-		events.enqueue(ev);
-	}
-	catch (std::exception const& e) {
-		std::cout << "Worker got " << e.what() << "\n";
-		break;
-	}
-}
-
-void sender(Containers::LockingQueue<Network::Packet>& messages, Network::Server& server)
-{
-	while (true) try {
-		Network::Packet p;
-		if (messages.dequeue(p) > 0) {
-			server.SendMessages(p);
-		}
-	}
-	catch (std::exception const& e) {
-		std::cout << "Worker got " << e.what() << "\n";
-		break;
-	}
-}
+#include "Services.h"
 
 int main(int argc, char** argv) {
 	if (argc < 2) {
@@ -69,22 +34,24 @@ int main(int argc, char** argv) {
 
 	Containers::BlockingQueue<Network::Packet> msg_queue;
 	Containers::LockingQueue<Game::Event> event_queue;
-	Containers::LockingQueue<Network::Packet> send_queue;
+	Containers::LockingQueue<Game::ClientMessage> send_queue;
 
 	auto msg_handler = [&](int id, std::vector<char>& data) -> void {
-		msg_queue.enqueue(process_message(id, data));
+		msg_queue.enqueue(Network::BuildPacket(id, data));
 	};
 
 	asio::io_service io_service;
 	Network::Server server(config, io_service, msg_handler);
-
-	auto msg_proc = std::thread([&msg_queue, &event_queue] {worker(msg_queue, event_queue); });
+	auto msg_proc = std::thread([&msg_queue, &event_queue] {Services::PacketParser(msg_queue, event_queue); });
 	auto game_loop = std::thread([&event_queue, &send_queue] {Game::Simulate(event_queue, send_queue); });
-	auto msg_sender = std::thread([&send_queue, &server] {sender(send_queue, server); });
+	auto msg_sender = std::thread([&send_queue, &server] {Services::PacketSender(send_queue, server); });
 
-	io_service.run();
+	auto io = std::thread([&]() {io_service.run(); });
 
 	msg_proc.join();
+	game_loop.join();
+	msg_sender.join();
+	io.join();
 
 	system("PAUSE");
 }

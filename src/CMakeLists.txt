@@ -37,6 +37,8 @@ target_link_libraries(SAS_Server
 target_compile_definitions(SAS_Server
 	PRIVATE ${LIBMONGOCXX_DEFINITIONS}
 	PRIVATE ASIO_STANDALONE
+	PRIVATE ASIO_HAS_MOVE
+	PRIVATE ASIO_HAS_STD_SYSTEM_ERROR
 )
 
 # Sanity-check that static library macros are not set when building against the shared library.

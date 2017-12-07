@@ -8,12 +8,20 @@ namespace Network {
 		unsigned short port;
 	};
 
+	using packet_handler = std::function<void(int, std::vector<char>&)>;
+
+	using RawPacket = std::vector<char>;
 	struct Packet {
 		int clientid;
 		std::vector<char> data;
 	};
 
-	using packet_handler = std::function<void(int, std::vector<char>&)>;
+	Network::Packet BuildPacket(int id, std::vector<char>& data) {
+		Network::Packet packet;
+		packet.clientid = id;
+		packet.data = data;
+		return packet;
+	}
 
 	class Connection : public std::enable_shared_from_this<Connection> {
 	public:
@@ -32,24 +40,39 @@ namespace Network {
 		 try to read
 		 */
 		void Connection::Process() {
-			read_message_header();
+			std::cout << "New connection: " << _id << std::endl;
+			_handler(_id, RawPacket(1));
+			_read_header();
 		}
 
-		void WriteMessage(Network::Packet& packet) {
+		// Need to add some sort of queuing
+		void WriteMessage(const RawPacket& packet) {
+			bool write_in_progress = !_write_msgs.empty();
+			_write_msgs.push_back(packet);
+			if (!write_in_progress) {
+				_write_messages();
+			}
+
+		}
+
+	private:
+		void _write_messages() {
+
 			auto self(shared_from_this());
 			asio::async_write(_socket,
-				asio::buffer(packet.data.data(),
-					packet.data.size()),
-				[this, self, packet](std::error_code ec, std::size_t /*length*/)
+				asio::buffer(_write_msgs.front(), _write_msgs.front().size()),
+				[this, self](std::error_code ec, std::size_t /*length*/)
 			{
 				if (!ec) {
-
+					_write_msgs.pop_front();
+					if (!_write_msgs.empty()) {
+						_write_messages();
+					}
 				}
 			});
 		}
 
-	private:
-		void read_message_header() {
+		void _read_header() {
 			auto self(shared_from_this());
 			asio::async_read(_socket,
 				asio::buffer(&_header, 4),
@@ -58,22 +81,21 @@ namespace Network {
 				if (!ec) {
 					std::cout << "Header: " << _header << std::endl;
 					_body_length = _header;
-					read_message_body();
+					_read_body();
 				}
 			});
 		}
-		void read_message_body() {
+		void _read_body() {
 			auto self(shared_from_this());
 			asio::async_read(_socket,
 				asio::buffer(_message_body),
 				asio::transfer_exactly(_body_length),
 				[this, self](std::error_code ec, size_t bytes_received) {
 				if (!ec) {
-					std::cout.write(_message_body.data(), _body_length) << std::endl;
 					_handler(_id, _message_body);
 				}
 
-				read_message_header();
+				_read_header();
 			});
 		}
 
@@ -82,6 +104,7 @@ namespace Network {
 		int _header;
 		int _body_length;
 		std::vector<char> _message_body;
+		std::deque<RawPacket> _write_msgs;
 		packet_handler _handler;
 	};
 
@@ -97,22 +120,22 @@ namespace Network {
 		{
 			//_acceptor.set_option(asio::ip::tcp::no_delay(true));
 			_acceptor.listen();
-			_do_accept();
+			_accept();
 		}
 
-		void SendMessages(Network::Packet& packet) {
-			_io_service.post(std::bind(&Connection::WriteMessage, _connections[packet.clientid].get(), packet));
+		void SendMessages(int clientid, const Network::RawPacket& packet) {
+			_io_service.post(std::bind(&Connection::WriteMessage, _connections[clientid].get(), packet));
 		}
 
 	private:
-		void _do_accept() {
+		void _accept() {
 			_acceptor.async_accept(_socket, [this](std::error_code ec) {
 				if (!ec) {
 					_socket.set_option(asio::ip::tcp::no_delay(true)); // disable nagles
 					_connections.push_back(std::move(std::make_shared<Connection>(_connections.size(), std::move(_socket), _handler)));
 					_connections.back()->Process();
 				}
-				_do_accept();
+				_accept();
 			});
 		}
 

@@ -33,6 +33,7 @@ namespace Containers {
 				_cv.wait(lk, [this] { return _queue.size() > 0; });
 				packet = std::move(_queue.front());
 				_queue.pop_front();
+				lk.unlock();
 				_cv.notify_one();
 			}
 
